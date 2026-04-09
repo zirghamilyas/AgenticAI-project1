@@ -1,5 +1,5 @@
 {
-  "name": "nestjs-weaviate",
+  "name": "Agent-Weaviate",
   "version": "1.0.0",
   "private": true,
   "description": "NestJS backend demo: Weaviate RAG, LangGraph delegating agent, streamed chat API",

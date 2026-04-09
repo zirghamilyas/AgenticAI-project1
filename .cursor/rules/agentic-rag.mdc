@@ -1,5 +1,5 @@
 ---
-description: "Standards for a Node.js TypeScript backend using Weaviate, LangGraph, LangChain, Docker, and Gemini/local-provider-ready abstractions."
+description: "Standards for a NestJS TypeScript backend using Weaviate, LangGraph, LangChain, Docker, and Gemini/local-provider-ready abstractions."
 alwaysApply: true
 ---
 
@@ -22,32 +22,35 @@ Document assumptions in the README.
 
 # Default stack decisions
 
-- Use Node.js with TypeScript and ESM.
+- Use Node.js with TypeScript and NestJS.
 - Use npm unless the repo already uses pnpm or yarn.
-- Use Express for the HTTP API unless the repo already has a strong backend convention.
-- Use Zod for env parsing and request validation.
-- Use Vitest for tests.
+- Use NestJS modules/controllers/providers, not a plain Express app structure.
+- Use DTOs plus ValidationPipe for request validation.
+- Use @nestjs/config for env loading and validation.
+- Use Jest and Supertest for testing.
 - Use Docker Compose for Weaviate.
 - Use the official Weaviate JS client.
 - Use LangGraph for orchestration and LangChain for model abstraction.
 - Prefer a current maintained Google LangChain integration for Gemini.
 - Keep model names and hosts env-driven rather than hardcoded.
+- Do not add Angular or any frontend unless explicitly asked.
 
 # Architecture requirements
 
-Keep route handlers thin.
-Keep business logic out of controllers/routes.
+Keep controllers thin.
+Keep business logic out of controllers.
 
-Separate code into clear modules such as:
-- config
-- api/routes
+Separate code into clear modules/services such as:
+- app
+- common/config
+- health
+- chat
 - agents
 - tools
 - db/weaviate
-- services/llm
+- llm
 - types
 - utils
-- tests
 
 Use explicit state types for the delegating agent graph.
 Prefer an explicit LangGraph StateGraph with named nodes over opaque autonomous agent wrappers.
@@ -65,6 +68,21 @@ Routing should be deterministic-first:
 If chart generation depends on RAG output, run sequentially.
 If chart generation and retrieval are independent, run them in parallel and merge the results.
 
+RAG is a sub-agent/service, not just a trivial tool.
+Chart.js is a simple tool/service.
+
+# NestJS-specific requirements
+
+- Use modules, controllers, providers, and injectable services.
+- Use a global ValidationPipe.
+- Use DTO classes for request validation.
+- Prefer built-in Nest patterns over ad hoc framework code.
+- Keep the public chat API as POST /api/chat.
+- Because the requirement is POST /api/chat, do not switch it to GET just to use @Sse().
+- Implement streaming manually in the controller with @Res() and chunked writes.
+- Prefer SSE-compatible chunks with content-type text/event-stream for easy curl testing.
+- The endpoint must stream incrementally and not buffer the full response before sending.
+
 # Weaviate requirements
 
 - Provide a docker-compose.yml that starts Weaviate locally.
@@ -76,14 +94,18 @@ If chart generation and retrieval are independent, run them in parallel and merg
   - question
   - answer
   - pageNumber
-- Configure fileId so it is not vectorized and not searchable.
+- Configure fileId as metadata only:
+  - not vectorized
+  - not searchable
+  - not filterable if the client/schema option supports that
 - Keep pageNumber as an array of text values.
 - Seed at least 3 fictional entries.
 - Seed at least one entry whose answer contains numeric values so combined chart + RAG demos are plausible.
 - All CRUD and query operations on the multi-tenant collection must use the tenant-scoped collection handle.
 - Do not assume embeddings are available.
-- Implement a retrieval fallback that uses Weaviate fetchObjects / iteration plus local ranking when embeddings or semantic search are unavailable.
+- Implement a retrieval fallback that uses Weaviate fetchObjects or iteration plus local ranking when embeddings or semantic search are unavailable.
 - Do not claim semantic retrieval when the implementation is using fallback keyword ranking.
+- fileId must never be used as a retrieval field; it is reference metadata only.
 
 # RAG agent behavior
 
@@ -104,6 +126,14 @@ Reference behavior:
 
 The answer should include human-readable citations.
 The data array should include the structured reference objects.
+
+If embeddings exist:
+- retrieve using vectorized fields only
+- carry fileId through from returned objects as metadata
+
+If embeddings do not exist:
+- use fetchObjects or collection iteration
+- rank with explicit simple keyword scoring
 
 # Chart tool behavior
 
@@ -146,9 +176,12 @@ POST /api/chat should accept a body similar to:
   "tenantId": "string"
 }
 
-Validate input with Zod.
-Return SSE or NDJSON streaming from /api/chat.
-Make the streaming easy to test from curl and browser clients.
+tenantId is required.
+If tenantId is missing, return 400 with a clear error.
+
+Validate input with DTOs and ValidationPipe.
+Return streaming output from /api/chat using chunked response.
+Make the streaming easy to test from curl.
 
 # LLM provider behavior
 
@@ -183,8 +216,10 @@ Add at least one integration test for the streaming chat endpoint using mocked L
 Include:
 - project overview
 - architecture summary
+- why NestJS was chosen
 - env vars
 - how to start Weaviate
+- how to initialize schema
 - how to seed data
 - how to run the dev server
 - example curl requests
@@ -200,6 +235,8 @@ Include:
 - Do not use an ORM or SQL database for this task.
 - Do not leave broken lint/test/build output.
 - Do not misrepresent fallback retrieval as vector search.
+- Do not use plain Express app structure unless the repo already forces it.
+- Do not use Zod unless the repo already standardizes on it; prefer Nest DTO validation.
 
 # Definition of done
 
@@ -209,4 +246,5 @@ Include:
 - The chat endpoint streams.
 - The delegating agent supports direct, RAG, chart, and combined flows.
 - Returned data includes RAG references and/or Chart.js config.
+- NestJS modules/controllers/providers are used cleanly.
 - Tests and README are included.

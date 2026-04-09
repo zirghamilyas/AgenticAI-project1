@@ -1,7 +1,7 @@
 Build the complete project in this repository.
 
 Goal:
-Create a runnable Node.js + TypeScript backend demo with:
+Create a runnable Node.js + TypeScript + NestJS backend demo with:
 - Dockerized Weaviate
 - a multi-tenant schema
 - seeded fictional data
@@ -14,23 +14,37 @@ Create a runnable Node.js + TypeScript backend demo with:
 Use these defaults unless the repository already has strong conventions:
 - TypeScript
 - Node.js 20+
-- ESM
+- NestJS
 - npm
-- Express
-- Zod
-- Vitest
-- SSE streaming for /api/chat
+- DTOs + ValidationPipe
+- @nestjs/config
+- Jest + Supertest
+- POST /api/chat with manual chunked streaming
 - current maintained package APIs only
 - no frontend
 
 Use these package families:
+- @nestjs/common
+- @nestjs/core
+- @nestjs/platform-express
+- @nestjs/config
+- class-validator
+- class-transformer
 - weaviate-client
 - langchain
 - @langchain/core
 - @langchain/langgraph
-- @langchain/google for Gemini chat integration
+- @langchain/google
+- jest
+- supertest
+
 You may add small supporting packages only when they clearly improve the implementation.
-Do not use deprecated v2/v0 examples or obsolete package APIs.
+Do not use deprecated examples or obsolete package APIs.
+
+Important alignment notes:
+- The job description explicitly prefers NestJS + TypeScript, so use NestJS rather than a plain Express app.
+- Angular is only a bonus, so do not build a frontend.
+- Keep the scope backend-only and assessment-focused.
 
 High-level implementation requirements
 
@@ -41,10 +55,11 @@ High-level implementation requirements
 - Enable multi-tenancy.
 - Create a tenant named tenant-demo.
 - Create a schema with these fields:
-  - fileId: string/text, not vectorized, not searchable
+  - fileId: metadata only, not vectorized, not searchable
   - question: text
   - answer: text
   - pageNumber: textArray
+- If supported by the client/schema config, also disable filterability for fileId.
 - Seed at least 3 fictional entries into tenant-demo.
 - At least one seed entry should include numeric values in the answer so a combined chart + RAG example feels plausible.
 - Do not manually provide vectors for the seeded entries.
@@ -98,6 +113,10 @@ Fallback ranking requirements:
 - keep this logic simple, explicit, and testable
 - do not falsely describe fallback ranking as semantic search
 
+Important:
+- fileId is never used for retrieval or matching
+- fileId is only returned from matched objects as metadata for references/citations
+
 5) Reference and citation behavior
 Group references by fileId.
 Merge unique page numbers for the same fileId.
@@ -133,7 +152,7 @@ type StreamPayload = {
   data: AgentData[];
 };
 
-6) Streaming API
+6) Streaming API in NestJS
 Expose at minimum:
 - GET /health
 - POST /api/chat
@@ -144,59 +163,78 @@ POST /api/chat input:
   "tenantId": "tenant-demo"
 }
 
-Use SSE for streaming.
+Implementation requirements:
+- Use a DTO class for validation
+- tenantId is required
+- if tenantId is missing, return 400
+- Use a global ValidationPipe
+- Keep the route as POST /api/chat
 
-SSE requirements:
-- set correct SSE headers
-- each SSE data payload must be valid JSON matching:
+Streaming requirements:
+- Do not switch to GET just to use @Sse()
+- Implement manual chunked streaming in the controller with @Res()
+- Prefer SSE-style chunks using content-type text/event-stream
+- each streamed data payload must be valid JSON matching:
   { "answer": "accumulated answer text so far", "data": [] }
 - stream multiple payloads as the answer grows
 - as soon as chart/reference data is known, include it in data
 - keep sending the full current data array in subsequent events
 - final event must contain the complete answer and complete data array
+- make the endpoint easy to test with curl -N
 
-Make the endpoint easy to test with curl -N.
-
-7) File structure
+7) NestJS structure
 Create a clean structure similar to this:
 
 src/
-  server.ts
-  app.ts
-  config/
-    env.ts
-  api/
-    routes/
-      health.ts
-      chat.ts
+  main.ts
+  app.module.ts
+  common/
+    config/
+      env.validation.ts
+  health/
+    health.module.ts
+    health.controller.ts
+  chat/
+    chat.module.ts
+    chat.controller.ts
+    chat.service.ts
+    dto/
+      chat.dto.ts
   agents/
-    delegating.graph.ts
-    rag.agent.ts
+    delegating/
+      delegating.graph.ts
+      routing.ts
+    rag/
+      rag.agent.ts
+      ranking.ts
+      references.ts
   tools/
-    chart.tool.ts
+    chart/
+      chart.tool.ts
   db/
     weaviate/
-      client.ts
-      schema.ts
-      seed.ts
-  services/
-    llm/
-      provider.ts
-      gemini.ts
-      mock.ts
+      weaviate.module.ts
+      weaviate.service.ts
+      schema.service.ts
+      seed.service.ts
+  llm/
+    llm.module.ts
+    provider.factory.ts
+    gemini.provider.ts
+    mock.provider.ts
   types/
-    agent.ts
-  utils/
-    routing.ts
-    references.ts
-    ranking.ts
+    agent.types.ts
 
-tests/
-  routing.test.ts
-  references.test.ts
-  chart.tool.test.ts
-  ranking.test.ts
-  chat.stream.test.ts
+scripts/
+  init-weaviate.ts
+  seed-weaviate.ts
+
+test/
+  routing.spec.ts
+  references.spec.ts
+  chart.tool.spec.ts
+  ranking.spec.ts
+  chat.stream.e2e-spec.ts
 
 Also create:
 - docker-compose.yml
@@ -204,41 +242,47 @@ Also create:
 - README.md
 - package.json
 - tsconfig.json
-- vitest config if needed
+- nest-cli.json if needed
+- jest config if needed
+
+You may adjust the exact folders if the repo already has a better Nest structure, but keep it clearly modular.
 
 8) LLM provider behavior
 - Use LangChain abstraction for LLM calls.
 - Implement Gemini support using GOOGLE_API_KEY.
 - Keep model choice env-driven, not hardcoded.
 - Put model creation behind a provider factory so a local provider can be added later.
-- Optional: implement a local OpenAI-compatible or Ollama provider only if it is quick and clean.
+- Optional: implement a local OpenAI-compatible or Ollama-style provider only if it is quick and clean.
 - Do not let optional local-provider work block the project.
 - For tests, always use a mocked provider.
 - If no real provider is configured at runtime, degrade gracefully with deterministic template responses and clear messaging.
 
 9) Validation and robustness
-- Use Zod for env validation.
-- Use Zod for request validation.
+- Use Nest DTO validation, not Zod, unless the repo already requires Zod.
+- Use @nestjs/config for env loading.
 - Add robust error handling and readable error messages.
-- Keep route handlers thin.
-- Keep business logic in services/agents/utils.
+- Keep controllers thin.
+- Keep business logic in services/agents/tools/utils.
 - Use explicit TypeScript types throughout.
 - No TODOs, no pseudocode, no dead files.
 
 10) Scripts
 Add npm scripts for at least:
-- dev
+- start:dev
 - build
-- start
+- start:prod
 - test
-- seed
-- init or setup
+- test:e2e
+- db:init
+- db:seed
+
 You may also add helpful compose scripts if useful.
 
 11) README
 Write a practical README that includes:
 - project overview
 - architecture summary
+- why NestJS was chosen for this implementation
 - environment variables
 - how to start Weaviate
 - how to initialize schema and seed data
@@ -254,7 +298,7 @@ Add:
 - unit tests for reference grouping and citation formatting
 - unit tests for chart tool output shape
 - unit tests for fallback retrieval ranking
-- one integration test for the streaming endpoint using mocked LLM behavior
+- one integration or e2e test for the streaming endpoint using mocked LLM behavior
 
 Execution instructions
 - First inspect the repository and reuse any existing useful structure.

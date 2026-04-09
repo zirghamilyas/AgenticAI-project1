@@ -10,6 +10,93 @@ NestJS fits a modular agent backend: dependency injection for Weaviate + LLM pro
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    Client(["Client"])
+
+    %% ── Entry ──────────────────────────────────────────────
+    Client      -- "POST /api/chat" -->         Controller
+
+    subgraph NestJS ["NestJS API"]
+        Controller["ChatController"]
+        ChatSvc["ChatService"]
+
+        Controller -- "streamChat()" --> ChatSvc
+
+        %% ── LangGraph ──────────────────────────────────────
+        subgraph LangGraph ["LangGraph  (DelegatingAgentService)"]
+            N1["① classifyIntent\nregex / keyword routing"]
+            N2["② executeTools"]
+            N3["③ preparePrompt"]
+            N1 --> N2 --> N3
+        end
+
+        ChatSvc -- "run(query, tenantId)" --> N1
+        N3      -- "returns state"        --> ChatSvc
+
+        %% ── Tools ──────────────────────────────────────────
+        RAG["RagAgentService"]
+        Chart["ChartToolService"]
+
+        N2 -- "intent: rag" -->         RAG
+        N2 -- "intent: chart" -->       Chart
+
+        %% ── RAG pipeline ───────────────────────────────────
+        subgraph RAGPipeline ["RAG Pipeline"]
+            Fetch["WeaviateService\nfetchObjects"]
+            Rank["ranking.ts\nkeyword scoring"]
+            Refs["references.ts\ncitation builder"]
+            Fetch --> Rank --> Refs
+        end
+
+        RAG -- "retrieve" --> Fetch
+        Refs -- "ranked refs + context" --> RAG
+
+        %% ── LLM ────────────────────────────────────────────
+        subgraph LLMLayer ["LLM Layer"]
+            Gemini["GeminiLlmProvider\nGOOGLE_API_KEY set"]
+            Mock["MockLlmProvider\noffline / LLM_PROVIDER=mock"]
+        end
+
+        ChatSvc -- "streamAnswer(prompt)" --> Gemini
+        ChatSvc -- "streamAnswer(prompt)" --> Mock
+    end
+
+    %% ── Weaviate ────────────────────────────────────────────
+    subgraph Weaviate ["Weaviate  (Docker)"]
+        Collection["AgentKnowledge\nmulti-tenant collection"]
+    end
+
+    Fetch       -- "tenant-scoped query" -->    Collection
+
+    %% ── Response path ───────────────────────────────────────
+    Gemini      -- "token chunks" -->           ChatSvc
+    Mock        -- "token chunks" -->           ChatSvc
+    ChatSvc     -- "SSE: {answer, data}" -->    Client
+```
+
+### Intent routing
+
+| Query pattern | Intent | Tools called |
+|---|---|---|
+| "hello", "thanks" | `direct` | none |
+| "what is the max temp?" | `rag` | RAG only |
+| "show a chart" | `chart` | Chart only |
+| "show a chart and summarize the KB" | `rag_chart_parallel` | RAG + Chart (parallel) |
+| "plot data from the manual" | `rag_chart_sequential` | RAG → Chart (sequential) |
+
+### Streaming response shape
+
+Every SSE frame carries the **full** accumulated state:
+
+```
+data: { "answer": "<growing text>", "data": [ <refs and/or chart> ] }
+```
+
+The `data` array is sent on the **first** chunk (empty answer) so the client can render references and charts immediately, before the LLM finishes.
+
+---
+
 - **`common/config`**: env validation (`@nestjs/config` + `class-validator`).
 - **`health`**: `GET /health`.
 - **`chat`**: `POST /api/chat` — manual `text/event-stream` streaming with JSON payloads `{ answer, data }`.

@@ -1,0 +1,212 @@
+---
+description: "Standards for a Node.js TypeScript backend using Weaviate, LangGraph, LangChain, Docker, and Gemini/local-provider-ready abstractions."
+alwaysApply: true
+---
+
+# Mission
+
+Build a complete, runnable, backend-only demo that satisfies the project brief end to end.
+
+Favor deterministic, testable code over magical abstractions.
+Do not leave TODOs, placeholders, or pseudo-code in committed files.
+When requirements are ambiguous, make the smallest reasonable assumption and continue.
+Document assumptions in the README.
+
+# Working style
+
+- Before coding, inspect the repository and produce a short implementation plan.
+- Then implement in small coherent steps.
+- After major edits, run the relevant checks/tests and fix failures before moving on.
+- Keep the README accurate and updated with exact commands that were actually used.
+- Reuse good existing structure if present; do not rewrite everything unnecessarily.
+
+# Default stack decisions
+
+- Use Node.js with TypeScript and ESM.
+- Use npm unless the repo already uses pnpm or yarn.
+- Use Express for the HTTP API unless the repo already has a strong backend convention.
+- Use Zod for env parsing and request validation.
+- Use Vitest for tests.
+- Use Docker Compose for Weaviate.
+- Use the official Weaviate JS client.
+- Use LangGraph for orchestration and LangChain for model abstraction.
+- Prefer a current maintained Google LangChain integration for Gemini.
+- Keep model names and hosts env-driven rather than hardcoded.
+
+# Architecture requirements
+
+Keep route handlers thin.
+Keep business logic out of controllers/routes.
+
+Separate code into clear modules such as:
+- config
+- api/routes
+- agents
+- tools
+- db/weaviate
+- services/llm
+- types
+- utils
+- tests
+
+Use explicit state types for the delegating agent graph.
+Prefer an explicit LangGraph StateGraph with named nodes over opaque autonomous agent wrappers.
+
+The delegating agent must orchestrate these paths:
+- direct answer
+- RAG agent
+- Chart.js tool
+- combined RAG + Chart flow
+
+Routing should be deterministic-first:
+- Use simple rules/keywords for obvious cases.
+- Use the LLM only when routing is ambiguous or for final synthesis.
+
+If chart generation depends on RAG output, run sequentially.
+If chart generation and retrieval are independent, run them in parallel and merge the results.
+
+# Weaviate requirements
+
+- Provide a docker-compose.yml that starts Weaviate locally.
+- Wait/retry until Weaviate is ready before schema initialization or seeding.
+- Create one multi-tenant collection for the RAG data.
+- Enable multi-tenancy and create at least one demo tenant.
+- The collection schema must include:
+  - fileId
+  - question
+  - answer
+  - pageNumber
+- Configure fileId so it is not vectorized and not searchable.
+- Keep pageNumber as an array of text values.
+- Seed at least 3 fictional entries.
+- Seed at least one entry whose answer contains numeric values so combined chart + RAG demos are plausible.
+- All CRUD and query operations on the multi-tenant collection must use the tenant-scoped collection handle.
+- Do not assume embeddings are available.
+- Implement a retrieval fallback that uses Weaviate fetchObjects / iteration plus local ranking when embeddings or semantic search are unavailable.
+- Do not claim semantic retrieval when the implementation is using fallback keyword ranking.
+
+# RAG agent behavior
+
+The RAG agent must:
+- retrieve candidate records from Weaviate
+- select the most relevant items
+- generate an answer grounded in retrieved items
+- return both answer content and structured reference metadata
+
+Reference behavior:
+- Group repeated references by fileId.
+- Merge unique page numbers for the same fileId.
+- Assign a human-facing sourceNumber based on first appearance order in the returned reference data array.
+- Format inline citations like:
+  - 1- Page 3
+  - 1- Pages 3, 4
+  - 2- Page 7
+
+The answer should include human-readable citations.
+The data array should include the structured reference objects.
+
+# Chart tool behavior
+
+- The Chart.js tool is mocked.
+- It may parse intent lightly, but it must always return a valid Chart.js config object.
+- A fixed mock config is acceptable.
+- Do not render charts server-side.
+- Return config JSON only.
+
+# Response contract
+
+The public chat endpoint must stream results.
+
+Every streamed payload must match this shape:
+{ "answer": string, "data": object[] }
+
+During streaming:
+- answer must contain the accumulated answer text so far
+- data must contain all currently-known tool/reference objects
+- once data is known, keep sending the full current data array in later chunks
+
+The final streamed payload must contain:
+- the complete answer
+- the complete data array
+
+Use a discriminated union for data entries.
+Support at least:
+- { type: "rag_reference", sourceNumber, fileId, pageNumbers, citationLabel, question, answer }
+- { type: "chartjs", chartId, config }
+
+# API requirements
+
+Expose at minimum:
+- GET /health
+- POST /api/chat
+
+POST /api/chat should accept a body similar to:
+{
+  "query": "string",
+  "tenantId": "string"
+}
+
+Validate input with Zod.
+Return SSE or NDJSON streaming from /api/chat.
+Make the streaming easy to test from curl and browser clients.
+
+# LLM provider behavior
+
+- Use LangChain abstractions for model calls.
+- Implement Gemini support via env vars.
+- Put model access behind a provider factory/interface.
+- Structure the code so a local provider can be added later without refactoring the app.
+- Tests must use a mocked model path and must not require a real API key.
+- If no provider is configured at runtime, degrade gracefully with explicit messaging or deterministic templates.
+
+# Quality bar
+
+- Write small pure functions where possible.
+- Prefer discriminated unions and explicit types.
+- Add meaningful error messages and defensive checks.
+- Avoid global mutable state.
+- Keep comments high signal; explain why, not what.
+- Do not bury critical logic in anonymous inline functions when named functions improve clarity.
+
+# Testing
+
+Add unit tests for:
+- routing / intent detection
+- reference grouping and citation formatting
+- chart tool output shape
+- fallback retrieval ranking behavior
+
+Add at least one integration test for the streaming chat endpoint using mocked LLM behavior.
+
+# README
+
+Include:
+- project overview
+- architecture summary
+- env vars
+- how to start Weaviate
+- how to seed data
+- how to run the dev server
+- example curl requests
+- example streamed response
+- notes on Gemini vs local-provider-ready setup
+- assumptions and tradeoffs
+
+# Do not do these
+
+- Do not add a frontend unless explicitly asked.
+- Do not introduce extra databases or unrelated services.
+- Do not over-engineer with microservices.
+- Do not use an ORM or SQL database for this task.
+- Do not leave broken lint/test/build output.
+- Do not misrepresent fallback retrieval as vector search.
+
+# Definition of done
+
+- The repository can be installed and run locally.
+- Weaviate starts from Docker Compose.
+- The schema is created and seeded.
+- The chat endpoint streams.
+- The delegating agent supports direct, RAG, chart, and combined flows.
+- Returned data includes RAG references and/or Chart.js config.
+- Tests and README are included.
